@@ -492,21 +492,35 @@ class CapCutProject:
         """
         Create a copy of this project with a new name.
 
+        Uses readable folder name directly to avoid CapCut's FSEvents-based
+        folder renaming which would cause race conditions with UUID-named folders.
+
         Args:
             new_name: Name for the copied project.
 
         Returns:
             New CapCutProject instance for the copy.
         """
-        # Generate new project ID
-        new_id = generate_uuid()
+        # Use readable name directly for folder (not UUID)
+        # This prevents CapCut from renaming the folder before we can access it
+        new_path = self.project_path.parent / new_name
 
-        # Create new folder
-        new_path = self.project_path.parent / new_id
+        # Handle duplicates: add (1), (2), etc. if folder exists
+        counter = 1
+        base_name = new_name
+        while new_path.exists():
+            new_name = f"{base_name} ({counter})"
+            new_path = self.project_path.parent / new_name
+            counter += 1
+
+        # Copy project folder
         shutil.copytree(self.project_path, new_path)
 
         # Load the copy
         copy_project = CapCutProject(new_path)
+
+        # Generate new UUID for internal IDs
+        new_id = generate_uuid()
 
         # Update IDs and name
         copy_project._content["id"] = new_id

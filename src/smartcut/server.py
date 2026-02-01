@@ -291,7 +291,8 @@ async def list_tools() -> list[Tool]:
             name="list_capcut_projects",
             description=(
                 "List all existing CapCut projects in the drafts directory. "
-                "Auto-detects drafts location on macOS, Windows, and Linux."
+                "Auto-detects drafts location on macOS, Windows, and Linux. "
+                "Only shows complete projects (with draft_info.json) that can be modified."
             ),
             inputSchema={
                 "type": "object",
@@ -299,6 +300,11 @@ async def list_tools() -> list[Tool]:
                     "drafts_dir": {
                         "type": "string",
                         "description": "Custom path to CapCut drafts directory (auto-detected if not set)",
+                    },
+                    "include_incomplete": {
+                        "type": "boolean",
+                        "description": "Also show incomplete projects that can't be modified",
+                        "default": False,
                     },
                 },
                 "required": [],

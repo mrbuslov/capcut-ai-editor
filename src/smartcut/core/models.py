@@ -174,6 +174,7 @@ class ProjectInfo(BaseModel):
     duration_formatted: str
     modified_time: int
     video_count: int = 0
+    has_content: bool = True  # Whether draft_content.json exists (project can be modified)
 
 
 class ExistingVideoSegment(BaseModel):

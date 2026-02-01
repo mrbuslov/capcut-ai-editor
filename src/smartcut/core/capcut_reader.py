@@ -28,14 +28,14 @@ class CapCutProject:
         Initialize with project path.
 
         Args:
-            project_path: Path to project folder (containing draft_content.json).
+            project_path: Path to project folder (containing draft_info.json).
         """
         self.project_path = project_path
-        self.content_file = project_path / "draft_content.json"
+        self.content_file = project_path / "draft_info.json"
         self.meta_file = project_path / "draft_meta_info.json"
 
         if not self.content_file.exists():
-            raise FileNotFoundError(f"draft_content.json not found in {project_path}")
+            raise FileNotFoundError(f"draft_info.json not found in {project_path}")
 
         self._content: dict = {}
         self._meta: dict = {}
@@ -62,8 +62,8 @@ class CapCutProject:
 
     @property
     def project_name(self) -> str:
-        """Get project name."""
-        return self._content.get("name", "Untitled")
+        """Get project name from meta file (primary) or content file (fallback)."""
+        return self._meta.get("draft_name") or self._content.get("name") or "Untitled"
 
     @project_name.setter
     def project_name(self, value: str) -> None:
@@ -351,6 +351,114 @@ class CapCutProject:
                 break
 
         self._update_duration()
+
+    def apply_cut_plan(self, cut_plan: dict, video_path: Path) -> None:
+        """
+        Apply cut plan to video segments.
+
+        Replaces video track segments with new ones based on keep_segments from cut_plan.
+
+        Args:
+            cut_plan: Dict with 'keep_segments' list containing {start, end} in seconds.
+            video_path: Source video path (to find matching material).
+        """
+        keep_segments = cut_plan.get("keep_segments", [])
+        if not keep_segments:
+            return
+
+        # Find video track
+        video_track = self._find_video_track()
+        if video_track is None:
+            return
+
+        # Find material_id for this video
+        material_id = self._find_material_id_for_path(video_path)
+        if material_id is None:
+            return
+
+        # Get existing segment as template (for copying default fields)
+        existing_segments = video_track.get("segments", [])
+        template_segment = existing_segments[0] if existing_segments else {}
+
+        # Build new segments from keep_segments
+        new_segments = []
+        timeline_offset_us = 0
+
+        for seg in keep_segments:
+            source_start_us = int(seg["start"] * MICROSECONDS_PER_SECOND)
+            source_end_us = int(seg["end"] * MICROSECONDS_PER_SECOND)
+            duration_us = source_end_us - source_start_us
+
+            new_segment = self._build_video_segment(
+                material_id=material_id,
+                timeline_start_us=timeline_offset_us,
+                source_start_us=source_start_us,
+                duration_us=duration_us,
+                template=template_segment,
+            )
+            new_segments.append(new_segment)
+            timeline_offset_us += duration_us
+
+        # Replace video track segments
+        video_track["segments"] = new_segments
+        self._update_duration()
+
+    def _find_video_track(self) -> Optional[dict]:
+        """Find the video track in tracks list."""
+        for track in self._content.get("tracks", []):
+            if track.get("type") == "video":
+                return track
+        return None
+
+    def _find_material_id_for_path(self, video_path: Path) -> Optional[str]:
+        """Find material_id for a video path."""
+        video_path_str = str(video_path)
+        for mat in self._content.get("materials", {}).get("videos", []):
+            if mat.get("path") == video_path_str:
+                return mat.get("id")
+        return None
+
+    def _build_video_segment(
+        self,
+        material_id: str,
+        timeline_start_us: int,
+        source_start_us: int,
+        duration_us: int,
+        template: dict = None,
+    ) -> dict:
+        """
+        Build a video segment JSON.
+
+        Args:
+            material_id: Video material ID.
+            timeline_start_us: Start position on timeline (microseconds).
+            source_start_us: Start position in source video (microseconds).
+            duration_us: Segment duration (microseconds).
+            template: Existing segment to copy default fields from.
+        """
+        # Start with template or minimal defaults
+        if template:
+            segment = template.copy()
+        else:
+            segment = {
+                "clip": {
+                    "alpha": 1.0,
+                    "flip": {"horizontal": False, "vertical": False},
+                    "rotation": 0.0,
+                    "scale": {"x": 1.0, "y": 1.0},
+                    "transform": {"x": 0.0, "y": 0.0},
+                },
+                "speed": 1.0,
+                "render_index": 0,
+            }
+
+        # Override with our values
+        segment["id"] = generate_uuid()
+        segment["material_id"] = material_id
+        segment["target_timerange"] = {"start": timeline_start_us, "duration": duration_us}
+        segment["source_timerange"] = {"start": source_start_us, "duration": duration_us}
+
+        return segment
 
     def _update_duration(self) -> None:
         """Recalculate and update project duration."""

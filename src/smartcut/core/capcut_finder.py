@@ -39,12 +39,13 @@ def get_capcut_drafts_dir() -> Optional[Path]:
     return path if path.exists() else None
 
 
-def list_projects(drafts_dir: Optional[Path] = None) -> list[ProjectInfo]:
+def list_projects(drafts_dir: Optional[Path] = None, require_content: bool = True) -> list[ProjectInfo]:
     """
     List all CapCut projects in drafts directory.
 
     Args:
         drafts_dir: Path to drafts directory. Auto-detected if None.
+        require_content: If True, only return projects with draft_info.json.
 
     Returns:
         List of ProjectInfo objects sorted by modification time (newest first).
@@ -62,9 +63,13 @@ def list_projects(drafts_dir: Optional[Path] = None) -> list[ProjectInfo]:
             continue
 
         meta_file = project_folder / "draft_meta_info.json"
-        content_file = project_folder / "draft_content.json"
+        content_file = project_folder / "draft_info.json"
 
         if not meta_file.exists():
+            continue
+
+        # Skip projects without content file if required
+        if require_content and not content_file.exists():
             continue
 
         try:
@@ -155,9 +160,12 @@ def _parse_project_info(
     duration_us = meta.get("tm_duration", 0)
     modified_time = meta.get("tm_draft_modified", 0)
 
+    # Check if content file exists
+    has_content = content_file.exists()
+
     # Count video materials from content file if exists
     video_count = 0
-    if content_file.exists():
+    if has_content:
         try:
             with open(content_file, "r", encoding="utf-8") as f:
                 content = json.load(f)
@@ -180,4 +188,5 @@ def _parse_project_info(
         duration_formatted=duration_formatted,
         modified_time=modified_time,
         video_count=video_count,
+        has_content=has_content,
     )

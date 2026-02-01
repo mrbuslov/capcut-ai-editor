@@ -18,12 +18,14 @@ from smartcut.tools.transcribe import transcribe
 
 async def list_capcut_projects(
     drafts_dir: Optional[str] = None,
+    include_incomplete: bool = False,
 ) -> dict:
     """
     List all CapCut projects in drafts directory.
 
     Args:
         drafts_dir: Path to drafts directory. Auto-detected if not specified.
+        include_incomplete: If True, also list projects without draft_info.json.
 
     Returns:
         List of projects with metadata.
@@ -40,13 +42,29 @@ async def list_capcut_projects(
             "message": "CapCut drafts directory not found. Is CapCut installed?",
         }
 
-    projects = list_projects(detected_dir)
+    # Get complete projects
+    projects = list_projects(detected_dir, require_content=True)
+
+    # Optionally get incomplete projects too
+    incomplete_count = 0
+    if include_incomplete:
+        all_projects = list_projects(detected_dir, require_content=False)
+        incomplete_count = len(all_projects) - len(projects)
+    else:
+        # Just count incomplete
+        all_projects = list_projects(detected_dir, require_content=False)
+        incomplete_count = len(all_projects) - len(projects)
+
+    message = f"Found {len(projects)} projects"
+    if incomplete_count > 0:
+        message += f" ({incomplete_count} incomplete projects skipped - missing draft_info.json)"
 
     return {
         "projects": [p.model_dump() for p in projects],
         "drafts_dir": str(detected_dir),
         "count": len(projects),
-        "message": f"Found {len(projects)} projects" if projects else "No projects found",
+        "incomplete_count": incomplete_count,
+        "message": message if projects else "No complete projects found",
     }
 
 
@@ -82,6 +100,17 @@ async def open_capcut_project(
     if not path.exists():
         return {"error": f"Project path not found: {path}"}
 
+    # Check for required files
+    content_file = path / "draft_info.json"
+    meta_file = path / "draft_meta_info.json"
+
+    if not content_file.exists():
+        return {
+            "error": f"Project missing draft_info.json file",
+            "path": str(path),
+            "suggestion": "This project may be incomplete or use a different CapCut version. Try opening it in CapCut first to regenerate the content file.",
+        }
+
     try:
         project = CapCutProject.load(path)
         data = project.to_project_data()
@@ -93,7 +122,14 @@ async def open_capcut_project(
         }
 
     except Exception as e:
-        return {"error": f"Failed to load project: {e}"}
+        return {
+            "error": f"Failed to load project: {e}",
+            "path": str(path),
+            "files_found": {
+                "draft_info.json": content_file.exists(),
+                "draft_meta_info.json": meta_file.exists(),
+            },
+        }
 
 
 async def add_subtitles_to_project(
@@ -231,6 +267,15 @@ async def smart_cut_project(
     else:
         return {"error": "Either project_path or project_name must be provided"}
 
+    # Check for required files
+    content_file = path / "draft_info.json"
+    if not content_file.exists():
+        return {
+            "error": f"Project missing draft_info.json file",
+            "path": str(path),
+            "suggestion": "This project may be incomplete. Try opening it in CapCut first, make any edit, and save.",
+        }
+
     try:
         # Load original project
         original = CapCutProject.load(path)
@@ -243,7 +288,10 @@ async def smart_cut_project(
         # Get all video sources
         video_paths = project.get_source_video_paths()
         if not video_paths:
-            return {"error": "No video files found in project"}
+            return {
+                "error": "No video files found in project",
+                "suggestion": "The project doesn't contain video materials. Add a video in CapCut first.",
+            }
 
         # Process each video and collect results
         all_stats = {
@@ -270,12 +318,16 @@ async def smart_cut_project(
                 duplicate_detection=detect_duplicates,
             )
 
-            stats = analysis_result.get("cut_plan", {}).get("stats", {})
+            cut_plan = analysis_result.get("cut_plan", {})
+            stats = cut_plan.get("stats", {})
             all_stats["original_duration"] += stats.get("original_duration", 0)
             all_stats["kept_duration"] += stats.get("kept_duration", 0)
             all_stats["duplicates_removed"] += stats.get("duplicates_removed", 0)
             all_stats["silences_removed"] += stats.get("silences_removed", 0)
             all_stats["videos_processed"] += 1
+
+            # Apply cuts to video segments in the project
+            project.apply_cut_plan(cut_plan, video_path)
 
             # Generate subtitles if requested
             if add_subtitles:

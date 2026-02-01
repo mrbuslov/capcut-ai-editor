@@ -33,7 +33,7 @@ winget install ffmpeg
 ## Installation
 
 ```bash
-cd smartcut-mcp
+cd capcut-ai-editor
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -e .
@@ -51,7 +51,7 @@ Add:
 {
   "mcpServers": {
     "smartcut": {
-      "command": "/path/to/smartcut-mcp/venv/bin/python",
+      "command": "/path/to/capcut-ai-editor/venv/bin/python",
       "args": ["-m", "smartcut.server"],
       "env": {
         "OPENAI_API_KEY": "sk-..."
@@ -61,7 +61,7 @@ Add:
 }
 ```
 
-Replace `/path/to/smartcut-mcp` with the actual path to the project.
+Replace `/path/to/capcut-ai-editor` with the actual path to the project.
 
 **Optional** (for audio enhancement via Auphonic):
 ```json

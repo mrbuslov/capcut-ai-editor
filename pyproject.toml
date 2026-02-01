@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "smartcut-mcp"
+name = "capcut-ai-editor"
 version = "0.1.0"
 description = "MCP server for intelligent video editing - removes silences, detects duplicates, generates subtitles"
 readme = "README.md"

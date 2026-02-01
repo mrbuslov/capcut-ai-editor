@@ -144,6 +144,7 @@ All modifications create a backup copy of the project (original stays untouched)
 | AUPHONIC_API_KEY | No | Auphonic API key (for audio enhancement) |
 | AUPHONIC_PRESET_UUID | No | Auphonic preset UUID |
 | CAPCUT_DRAFTS_DIR | No | Path to CapCut drafts folder (auto-detected) |
+| SMARTCUT_ALLOWED_TARGETS | No | What can be modified: `capcut` (default), `source`, or `all` |
 
 ## Troubleshooting
 

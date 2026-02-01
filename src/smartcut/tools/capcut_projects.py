@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal, Optional
 
-from smartcut.config import get_settings
+from smartcut.config import can_modify_capcut, get_settings
 from smartcut.core.capcut_draft import TextStyle
 from smartcut.core.capcut_finder import (
     find_project_by_name,
@@ -157,6 +157,13 @@ async def add_subtitles_to_project(
     Returns:
         Path to modified project copy.
     """
+    # Check if CapCut modification is allowed
+    if not can_modify_capcut():
+        return {
+            "error": "CapCut project modification is disabled",
+            "suggestion": "Set SMARTCUT_ALLOWED_TARGETS=capcut or SMARTCUT_ALLOWED_TARGETS=all to enable",
+        }
+
     # Find project
     if project_path:
         path = Path(project_path)
@@ -257,6 +264,13 @@ async def smart_cut_project(
     Returns:
         Path to modified project copy with statistics.
     """
+    # Check if CapCut modification is allowed
+    if not can_modify_capcut():
+        return {
+            "error": "CapCut project modification is disabled",
+            "suggestion": "Set SMARTCUT_ALLOWED_TARGETS=capcut or SMARTCUT_ALLOWED_TARGETS=all to enable",
+        }
+
     # Find project
     if project_path:
         path = Path(project_path)

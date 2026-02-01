@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from smartcut.config import get_settings
+from smartcut.config import can_modify_source, get_settings
 from smartcut.core.auphonic_client import AuphonicClient
 from smartcut.core.ffmpeg_utils import extract_audio, mux_audio_video
 
@@ -33,6 +33,13 @@ async def enhance_audio(
     Returns:
         Enhanced file path and processing information.
     """
+    # Check if source file modification is allowed
+    if not can_modify_source():
+        return {
+            "error": "Source file modification is disabled",
+            "suggestion": "Set SMARTCUT_ALLOWED_TARGETS=source or SMARTCUT_ALLOWED_TARGETS=all to enable",
+        }
+
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")

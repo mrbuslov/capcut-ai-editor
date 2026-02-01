@@ -7,6 +7,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from smartcut.config import can_modify_capcut, can_modify_source
 from smartcut.core.ffmpeg_utils import check_ffmpeg_installed
 from smartcut.tools.analyze import analyze_content
 from smartcut.tools.audio_enhance import enhance_audio
@@ -27,64 +28,9 @@ from smartcut.tools.video_export import export_video
 server = Server("smartcut")
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    """List all available tools."""
+def _get_readonly_tools() -> list[Tool]:
+    """Get read-only tools (always available)."""
     return [
-        Tool(
-            name="smart_cut",
-            description=(
-                "Main tool for processing talking head videos. "
-                "Transcribes, removes long pauses, detects duplicate takes, "
-                "and exports to CapCut project or video file. "
-                "The last take of duplicates is always kept (assumed to be the best)."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path to the video file (MOV, MP4, etc.)",
-                    },
-                    "language": {
-                        "type": "string",
-                        "description": "Language code (e.g., 'ru', 'en'). Auto-detect if not specified.",
-                    },
-                    "silence_threshold_sec": {
-                        "type": "number",
-                        "description": "Minimum pause duration to cut (default 3.0 seconds)",
-                        "default": 3.0,
-                    },
-                    "detect_duplicates": {
-                        "type": "boolean",
-                        "description": "Whether to detect and remove duplicate takes",
-                        "default": True,
-                    },
-                    "output_format": {
-                        "type": "string",
-                        "enum": ["capcut", "video", "both"],
-                        "description": "Output format - 'capcut' (CapCut project), 'video' (MP4/MOV file), or 'both'",
-                        "default": "capcut",
-                    },
-                    "project_name": {
-                        "type": "string",
-                        "description": "Name for the CapCut project",
-                    },
-                    "add_subtitles": {
-                        "type": "boolean",
-                        "description": "Whether to add subtitles",
-                        "default": True,
-                    },
-                    "subtitle_style": {
-                        "type": "string",
-                        "enum": ["dynamic", "simple"],
-                        "description": "Subtitle style - 'dynamic' (with accents) or 'simple'",
-                        "default": "dynamic",
-                    },
-                },
-                "required": ["file_path"],
-            },
-        ),
         Tool(
             name="transcribe",
             description=(
@@ -134,6 +80,43 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="generate_subtitles",
+            description=(
+                "Generate subtitles from transcription as SRT file. "
+                "Supports dynamic styling with accent words."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "transcription_data": {
+                        "type": "object",
+                        "description": "Transcription data from transcribe tool",
+                    },
+                    "cut_plan_data": {
+                        "type": "object",
+                        "description": "Cut plan to align subtitles to",
+                    },
+                    "style": {
+                        "type": "string",
+                        "enum": ["dynamic", "simple"],
+                        "description": "Subtitle style",
+                        "default": "dynamic",
+                    },
+                    "output_srt_path": {
+                        "type": "string",
+                        "description": "Path for SRT file output",
+                    },
+                },
+                "required": ["transcription_data", "cut_plan_data"],
+            },
+        ),
+    ]
+
+
+def _get_capcut_tools() -> list[Tool]:
+    """Get CapCut modification tools (require SMARTCUT_ALLOWED_TARGETS=capcut or all)."""
+    return [
+        Tool(
             name="generate_capcut_project",
             description=(
                 "Generate a CapCut draft project from a cut plan. "
@@ -171,120 +154,6 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["file_path", "cut_plan_data"],
-            },
-        ),
-        Tool(
-            name="export_video",
-            description=(
-                "Export cut video as a new file using FFmpeg. "
-                "Uses stream copy for fast, lossless export."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path to the source video file",
-                    },
-                    "cut_plan_data": {
-                        "type": "object",
-                        "description": "Cut plan from analyze_content tool",
-                    },
-                    "output_path": {
-                        "type": "string",
-                        "description": "Output file path (auto-generated if not set)",
-                    },
-                    "preserve_format": {
-                        "type": "boolean",
-                        "description": "Keep original format (MOV stays MOV)",
-                        "default": True,
-                    },
-                },
-                "required": ["file_path", "cut_plan_data"],
-            },
-        ),
-        Tool(
-            name="generate_subtitles",
-            description=(
-                "Generate subtitles from transcription as SRT file. "
-                "Supports dynamic styling with accent words."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "transcription_data": {
-                        "type": "object",
-                        "description": "Transcription data from transcribe tool",
-                    },
-                    "cut_plan_data": {
-                        "type": "object",
-                        "description": "Cut plan to align subtitles to",
-                    },
-                    "style": {
-                        "type": "string",
-                        "enum": ["dynamic", "simple"],
-                        "description": "Subtitle style",
-                        "default": "dynamic",
-                    },
-                    "output_srt_path": {
-                        "type": "string",
-                        "description": "Path for SRT file output",
-                    },
-                },
-                "required": ["transcription_data", "cut_plan_data"],
-            },
-        ),
-        Tool(
-            name="enhance_audio",
-            description=(
-                "Enhance audio quality using Auphonic API. "
-                "Includes loudness normalization, noise reduction, and leveling. "
-                "Requires AUPHONIC_API_KEY environment variable."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path to the video file",
-                    },
-                    "preset_uuid": {
-                        "type": "string",
-                        "description": "Auphonic preset UUID (uses AUPHONIC_PRESET_UUID env var if not set)",
-                    },
-                    "output_path": {
-                        "type": "string",
-                        "description": "Output file path (auto-generated if not set)",
-                    },
-                },
-                "required": ["file_path"],
-            },
-        ),
-        Tool(
-            name="normalize_audio",
-            description=(
-                "Normalize audio loudness using FFmpeg. "
-                "Free alternative to Auphonic for basic loudness normalization. "
-                "Standard target is -16 LUFS for social media."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path to the video/audio file",
-                    },
-                    "target_lufs": {
-                        "type": "number",
-                        "description": "Target loudness in LUFS (default -16)",
-                        "default": -16.0,
-                    },
-                    "output_path": {
-                        "type": "string",
-                        "description": "Output file path (auto-generated if not set)",
-                    },
-                },
-                "required": ["file_path"],
             },
         ),
         Tool(
@@ -413,6 +282,176 @@ async def list_tools() -> list[Tool]:
             },
         ),
     ]
+
+
+def _get_source_tools() -> list[Tool]:
+    """Get source file modification tools (require SMARTCUT_ALLOWED_TARGETS=source or all)."""
+    return [
+        Tool(
+            name="export_video",
+            description=(
+                "Export cut video as a new file using FFmpeg. "
+                "Uses stream copy for fast, lossless export."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the source video file",
+                    },
+                    "cut_plan_data": {
+                        "type": "object",
+                        "description": "Cut plan from analyze_content tool",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Output file path (auto-generated if not set)",
+                    },
+                    "preserve_format": {
+                        "type": "boolean",
+                        "description": "Keep original format (MOV stays MOV)",
+                        "default": True,
+                    },
+                },
+                "required": ["file_path", "cut_plan_data"],
+            },
+        ),
+        Tool(
+            name="enhance_audio",
+            description=(
+                "Enhance audio quality using Auphonic API. "
+                "Includes loudness normalization, noise reduction, and leveling. "
+                "Requires AUPHONIC_API_KEY environment variable."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the video file",
+                    },
+                    "preset_uuid": {
+                        "type": "string",
+                        "description": "Auphonic preset UUID (uses AUPHONIC_PRESET_UUID env var if not set)",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Output file path (auto-generated if not set)",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        ),
+        Tool(
+            name="normalize_audio",
+            description=(
+                "Normalize audio loudness using FFmpeg. "
+                "Free alternative to Auphonic for basic loudness normalization. "
+                "Standard target is -16 LUFS for social media."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the video/audio file",
+                    },
+                    "target_lufs": {
+                        "type": "number",
+                        "description": "Target loudness in LUFS (default -16)",
+                        "default": -16.0,
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Output file path (auto-generated if not set)",
+                    },
+                },
+                "required": ["file_path"],
+            },
+        ),
+    ]
+
+
+def _get_smart_cut_tool() -> Tool:
+    """Get the main smart_cut tool."""
+    return Tool(
+        name="smart_cut",
+        description=(
+            "Main tool for processing talking head videos. "
+            "Transcribes, removes long pauses, detects duplicate takes, "
+            "and exports to CapCut project or video file. "
+            "The last take of duplicates is always kept (assumed to be the best)."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the video file (MOV, MP4, etc.)",
+                },
+                "language": {
+                    "type": "string",
+                    "description": "Language code (e.g., 'ru', 'en'). Auto-detect if not specified.",
+                },
+                "silence_threshold_sec": {
+                    "type": "number",
+                    "description": "Minimum pause duration to cut (default 3.0 seconds)",
+                    "default": 3.0,
+                },
+                "detect_duplicates": {
+                    "type": "boolean",
+                    "description": "Whether to detect and remove duplicate takes",
+                    "default": True,
+                },
+                "output_format": {
+                    "type": "string",
+                    "enum": ["capcut", "video", "both"],
+                    "description": "Output format - 'capcut' (CapCut project), 'video' (MP4/MOV file), or 'both'",
+                    "default": "capcut",
+                },
+                "project_name": {
+                    "type": "string",
+                    "description": "Name for the CapCut project",
+                },
+                "add_subtitles": {
+                    "type": "boolean",
+                    "description": "Whether to add subtitles",
+                    "default": True,
+                },
+                "subtitle_style": {
+                    "type": "string",
+                    "enum": ["dynamic", "simple"],
+                    "description": "Subtitle style - 'dynamic' (with accents) or 'simple'",
+                    "default": "dynamic",
+                },
+            },
+            "required": ["file_path"],
+        },
+    )
+
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    """List available tools based on SMARTCUT_ALLOWED_TARGETS setting."""
+    tools = []
+
+    # smart_cut is special - it can output to either, so include if any is allowed
+    if can_modify_capcut() or can_modify_source():
+        tools.append(_get_smart_cut_tool())
+
+    # Always include read-only tools
+    tools.extend(_get_readonly_tools())
+
+    # Add CapCut tools if allowed
+    if can_modify_capcut():
+        tools.extend(_get_capcut_tools())
+
+    # Add source file tools if allowed
+    if can_modify_source():
+        tools.extend(_get_source_tools())
+
+    return tools
 
 
 @server.call_tool()

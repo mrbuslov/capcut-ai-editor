@@ -2,7 +2,7 @@
 
 import platform
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -18,6 +18,14 @@ class Settings(BaseSettings):
 
     # CapCut
     capcut_drafts_dir: Optional[str] = Field(default=None, alias="CAPCUT_DRAFTS_DIR")
+
+    # Safety: what can SmartCut modify?
+    # - "capcut" = only CapCut projects (default, safest)
+    # - "source" = only source video files
+    # - "all" = both CapCut and source files
+    allowed_targets: Literal["capcut", "source", "all"] = Field(
+        default="capcut", alias="SMARTCUT_ALLOWED_TARGETS"
+    )
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -53,3 +61,15 @@ MICROSECONDS_PER_SECOND = 1_000_000
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+
+
+def can_modify_capcut() -> bool:
+    """Check if modifying CapCut projects is allowed."""
+    settings = get_settings()
+    return settings.allowed_targets in ("capcut", "all")
+
+
+def can_modify_source() -> bool:
+    """Check if modifying source files is allowed."""
+    settings = get_settings()
+    return settings.allowed_targets in ("source", "all")

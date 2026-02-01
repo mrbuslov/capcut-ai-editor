@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from smartcut.config import can_modify_source
 from smartcut.core.ffmpeg_utils import (
     check_ffmpeg_installed,
     concat_segments,
@@ -34,6 +35,13 @@ async def export_video(
     Returns:
         Output file path and information.
     """
+    # Check if source file modification is allowed
+    if not can_modify_source():
+        return {
+            "error": "Source file modification is disabled",
+            "suggestion": "Set SMARTCUT_ALLOWED_TARGETS=source or SMARTCUT_ALLOWED_TARGETS=all to enable",
+        }
+
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")

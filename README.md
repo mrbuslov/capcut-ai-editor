@@ -93,3 +93,7 @@ Open the project in CapCut, select the video track, use Text → Auto Captions, 
 
 **CapCut doesn't see changes**
 Restart CapCut. It monitors the drafts folder but sometimes needs a restart.
+
+## Related Tools
+
+- [capcut-cli](https://github.com/renezander030/capcut-cli) — CLI for editing CapCut draft_content.json: change text, timing, speed, volume. JSON output, batch edits via JSONL.

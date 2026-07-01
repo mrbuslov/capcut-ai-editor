@@ -15,7 +15,7 @@ MCP server for automated "talking head" video editing. Works with Claude Code to
 src/smartcut/
 ├── __init__.py              # Version
 ├── config.py                # Settings, env vars, constants
-├── server.py                # MCP server entry point, 3 tools
+├── server.py                # MCP server entry point, 8 tools
 ├── core/
 │   ├── models.py            # Pydantic models (CapCutSubtitleSegment, etc.)
 │   ├── whisper_client.py    # OpenAI Whisper API wrapper (optional)
@@ -24,7 +24,7 @@ src/smartcut/
 │   ├── capcut_reader.py     # CapCut project reader/modifier + subtitle parser
 │   └── capcut_finder.py     # CapCut project discovery
 └── tools/
-    └── capcut_projects.py   # All 3 MCP tools + heuristic analysis engine
+    └── capcut_projects.py   # All 8 MCP tools + heuristic analysis engine
 ```
 
 ## Key Files
@@ -34,16 +34,20 @@ src/smartcut/
 - Constants: `SILENCE_THRESHOLD_SEC = 1.0`, `DUPLICATE_SIMILARITY_THRESHOLD = 0.6`
 
 ### server.py
-- 3 MCP tools: `list_capcut_projects`, `open_capcut_project`, `smart_cut_project`
+- 8 MCP tools:
+  - `list_capcut_projects`, `open_capcut_project`, `smart_cut_project` (original)
+  - `edit_subtitle`, `split_subtitle`, `merge_subtitles`, `fix_word_timing`, `batch_edit_subtitles` (subtitle corrections)
 
 ### capcut_reader.py
 - `CapCutProject` class for loading/modifying existing CapCut projects
 - Key methods: `load()`, `save()`, `get_subtitle_segments()`, `remove_time_ranges()`
+- Subtitle corrections: `edit_subtitle_text()`, `edit_subtitle_timing()`, `split_subtitle()`, `merge_subtitles()`, `fix_word_timing()`
 - Reads `draft_info.json` (content) and `draft_meta_info.json` (metadata)
 
 ### tools/capcut_projects.py
 - Main tool: `smart_cut_project()` — the core function
 - Heuristic engine: `find_gaps()`, `find_duplicate_takes()`, `compute_text_similarity()`
+- Subtitle correction wrappers: `edit_subtitle()`, `split_subtitle()`, `merge_subtitles()`, `fix_word_timing()`, `batch_edit_subtitles()`
 - Optional: `_detect_duplicates_with_llm()` for OpenAI-enhanced detection
 
 ### capcut_finder.py

@@ -519,6 +519,237 @@ class CapCutProject:
             "speed": 1.0,
         }
 
+    # ------------------------------------------------------------------
+    # Subtitle correction operations
+    # ------------------------------------------------------------------
+
+    def _find_segment_by_id(self, segment_id: str) -> dict | None:
+        for track in self._content.get("tracks", []):
+            for seg in track.get("segments", []):
+                if seg.get("id") == segment_id:
+                    return seg
+        return None
+
+    def _find_material_by_id(self, material_id: str) -> dict | None:
+        for mat in self._content.get("materials", {}).get("texts", []):
+            if mat.get("id") == material_id:
+                return mat
+        return None
+
+    def _find_text_track(self) -> dict | None:
+        for track in self._content.get("tracks", []):
+            if track.get("type") == "text":
+                return track
+        return None
+
+    def edit_subtitle_text(self, segment_id: str, new_text: str) -> bool:
+        """Change subtitle display text, updating content JSON and styles range."""
+        seg = self._find_segment_by_id(segment_id)
+        if not seg:
+            return False
+        mat = self._find_material_by_id(seg["material_id"])
+        if not mat:
+            return False
+
+        content = json.loads(mat.get("content", "{}"))
+        content["text"] = new_text
+        for style in content.get("styles", []):
+            style["range"] = [0, len(new_text)]
+        mat["content"] = json.dumps(content)
+
+        words = mat.get("words")
+        if words:
+            mat["words"] = {"text": [], "start_time": [], "end_time": []}
+
+        return True
+
+    def edit_subtitle_timing(
+        self,
+        segment_id: str,
+        new_start_us: int | None = None,
+        new_duration_us: int | None = None,
+    ) -> bool:
+        """Adjust a subtitle's position and/or duration on the timeline."""
+        seg = self._find_segment_by_id(segment_id)
+        if not seg:
+            return False
+        if new_start_us is not None:
+            seg["target_timerange"]["start"] = new_start_us
+        if new_duration_us is not None:
+            seg["target_timerange"]["duration"] = new_duration_us
+        self._update_duration()
+        return True
+
+    def fix_word_timing(
+        self,
+        segment_id: str,
+        words_text: list[str],
+        words_start_ms: list[int],
+        words_end_ms: list[int],
+    ) -> bool:
+        """Replace word-level timing arrays on a subtitle material."""
+        if not (len(words_text) == len(words_start_ms) == len(words_end_ms)):
+            raise ValueError(
+                f"Arrays must be equal length: text={len(words_text)}, "
+                f"start={len(words_start_ms)}, end={len(words_end_ms)}"
+            )
+        seg = self._find_segment_by_id(segment_id)
+        if not seg:
+            return False
+        mat = self._find_material_by_id(seg["material_id"])
+        if not mat:
+            return False
+        mat["words"] = {
+            "text": words_text,
+            "start_time": words_start_ms,
+            "end_time": words_end_ms,
+        }
+        return True
+
+    def split_subtitle(self, segment_id: str, split_time_us: int) -> bool:
+        """Split a subtitle into two at a given timeline point."""
+        seg = self._find_segment_by_id(segment_id)
+        if not seg:
+            return False
+        mat = self._find_material_by_id(seg["material_id"])
+        if not mat:
+            return False
+
+        seg_start = seg["target_timerange"]["start"]
+        seg_end = seg_start + seg["target_timerange"]["duration"]
+
+        if split_time_us <= seg_start or split_time_us >= seg_end:
+            return False
+
+        ratio = (split_time_us - seg_start) / (seg_end - seg_start)
+        content = json.loads(mat.get("content", "{}"))
+        words = mat.get("words", {})
+        word_texts = words.get("text", [])
+
+        split_idx = self._find_word_split_index(words, ratio)
+        if split_idx <= 0 or split_idx >= len(word_texts):
+            split_idx = max(1, len(word_texts) // 2)
+
+        text_a = " ".join(word_texts[:split_idx]) if word_texts else content.get("text", "")
+        text_b = " ".join(word_texts[split_idx:]) if word_texts else ""
+
+        if not text_a or not text_b:
+            return False
+
+        # --- Modify existing material (part A) ---
+        content["text"] = text_a
+        for style in content.get("styles", []):
+            style["range"] = [0, len(text_a)]
+        mat["content"] = json.dumps(content)
+        if word_texts:
+            mat["words"] = {
+                "text": word_texts[:split_idx],
+                "start_time": words.get("start_time", [])[:split_idx],
+                "end_time": words.get("end_time", [])[:split_idx],
+            }
+        dur_a = split_time_us - seg_start
+        seg["target_timerange"]["duration"] = dur_a
+
+        # --- Create new material (part B) via deepcopy ---
+        new_mat = copy.deepcopy(mat)
+        new_mat_id = generate_uuid()
+        new_mat["id"] = new_mat_id
+        content_b = json.loads(new_mat.get("content", "{}"))
+        content_b["text"] = text_b
+        for style in content_b.get("styles", []):
+            style["range"] = [0, len(text_b)]
+        new_mat["content"] = json.dumps(content_b)
+        if word_texts:
+            new_mat["words"] = {
+                "text": word_texts[split_idx:],
+                "start_time": words.get("start_time", [])[split_idx:],
+                "end_time": words.get("end_time", [])[split_idx:],
+            }
+        self._content["materials"]["texts"].append(new_mat)
+
+        # --- Create new segment (part B) ---
+        new_seg = copy.deepcopy(seg)
+        new_seg["id"] = generate_uuid()
+        new_seg["material_id"] = new_mat_id
+        new_seg["target_timerange"] = {
+            "start": split_time_us,
+            "duration": seg_end - split_time_us,
+        }
+
+        track = self._find_text_track()
+        if track:
+            idx = next(
+                (i for i, s in enumerate(track["segments"]) if s.get("id") == seg.get("id")),
+                len(track["segments"]) - 1,
+            )
+            track["segments"].insert(idx + 1, new_seg)
+
+        self._update_duration()
+        return True
+
+    def merge_subtitles(self, segment_id_a: str, segment_id_b: str) -> bool:
+        """Merge two subtitles into one, extending A to cover B's range."""
+        seg_a = self._find_segment_by_id(segment_id_a)
+        seg_b = self._find_segment_by_id(segment_id_b)
+        if not seg_a or not seg_b:
+            return False
+
+        mat_a = self._find_material_by_id(seg_a["material_id"])
+        mat_b = self._find_material_by_id(seg_b["material_id"])
+        if not mat_a or not mat_b:
+            return False
+
+        content_a = json.loads(mat_a.get("content", "{}"))
+        content_b = json.loads(mat_b.get("content", "{}"))
+        merged_text = f"{content_a.get('text', '')} {content_b.get('text', '')}"
+        content_a["text"] = merged_text
+        for style in content_a.get("styles", []):
+            style["range"] = [0, len(merged_text)]
+        mat_a["content"] = json.dumps(content_a)
+
+        words_a = mat_a.get("words", {})
+        words_b = mat_b.get("words", {})
+        if words_a.get("text") and words_b.get("text"):
+            offset_us = seg_b["target_timerange"]["start"] - seg_a["target_timerange"]["start"]
+            offset_ms = offset_us // 1000
+            mat_a["words"] = {
+                "text": words_a.get("text", []) + words_b.get("text", []),
+                "start_time": (
+                    words_a.get("start_time", [])
+                    + [t + offset_ms for t in words_b.get("start_time", [])]
+                ),
+                "end_time": (
+                    words_a.get("end_time", [])
+                    + [t + offset_ms for t in words_b.get("end_time", [])]
+                ),
+            }
+
+        seg_b_end = seg_b["target_timerange"]["start"] + seg_b["target_timerange"]["duration"]
+        seg_a["target_timerange"]["duration"] = seg_b_end - seg_a["target_timerange"]["start"]
+
+        track = self._find_text_track()
+        if track:
+            track["segments"] = [s for s in track["segments"] if s.get("id") != seg_b.get("id")]
+
+        self._cleanup_orphaned_text_materials()
+        self._update_duration()
+        return True
+
+    @staticmethod
+    def _find_word_split_index(words: dict, ratio: float) -> int:
+        word_texts = words.get("text", [])
+        end_times = words.get("end_time", [])
+        if not word_texts:
+            return 1
+        if not end_times:
+            return max(1, int(len(word_texts) * ratio))
+        total_dur = end_times[-1] if end_times[-1] > 0 else 1
+        target_ms = int(total_dur * ratio)
+        for i, t in enumerate(words.get("start_time", [])):
+            if t >= target_ms:
+                return max(1, i)
+        return max(1, len(word_texts) // 2)
+
     def _update_duration(self) -> None:
         """Recalculate and update project duration."""
         max_end = 0

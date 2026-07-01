@@ -373,6 +373,217 @@ def _detect_duplicates_with_llm(
 
 
 # ---------------------------------------------------------------------------
+# Tool: edit_subtitle
+# ---------------------------------------------------------------------------
+
+async def edit_subtitle(
+    project_path: Optional[str] = None,
+    project_name: Optional[str] = None,
+    segment_id: str = "",
+    new_text: Optional[str] = None,
+    new_start_sec: Optional[float] = None,
+    new_duration_sec: Optional[float] = None,
+) -> dict:
+    """Edit subtitle text and/or timing."""
+    path = _resolve_project_path(project_path, project_name)
+    if isinstance(path, dict):
+        return path
+
+    if not segment_id:
+        return {"error": "segment_id is required"}
+
+    project = CapCutProject.load(path)
+    changed = []
+
+    if new_text is not None:
+        if project.edit_subtitle_text(segment_id, new_text):
+            changed.append("text")
+        else:
+            return {"error": f"Segment '{segment_id}' not found"}
+
+    if new_start_sec is not None or new_duration_sec is not None:
+        start_us = int(new_start_sec * MICROSECONDS_PER_SECOND) if new_start_sec is not None else None
+        dur_us = int(new_duration_sec * MICROSECONDS_PER_SECOND) if new_duration_sec is not None else None
+        if project.edit_subtitle_timing(segment_id, start_us, dur_us):
+            changed.append("timing")
+        else:
+            return {"error": f"Segment '{segment_id}' not found"}
+
+    if not changed:
+        return {"error": "Nothing to change — provide new_text, new_start_sec, or new_duration_sec"}
+
+    project.save()
+    return {
+        "project_name": project.project_name,
+        "segment_id": segment_id,
+        "changed": changed,
+        "message": f"Subtitle updated ({', '.join(changed)}). Restart CapCut to see changes.",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: split_subtitle
+# ---------------------------------------------------------------------------
+
+async def split_subtitle(
+    project_path: Optional[str] = None,
+    project_name: Optional[str] = None,
+    segment_id: str = "",
+    split_time_sec: float = 0.0,
+) -> dict:
+    """Split a subtitle into two at a given time point."""
+    path = _resolve_project_path(project_path, project_name)
+    if isinstance(path, dict):
+        return path
+
+    if not segment_id:
+        return {"error": "segment_id is required"}
+    if split_time_sec <= 0:
+        return {"error": "split_time_sec must be > 0"}
+
+    project = CapCutProject.load(path)
+    split_us = int(split_time_sec * MICROSECONDS_PER_SECOND)
+
+    if project.split_subtitle(segment_id, split_us):
+        project.save()
+        return {
+            "project_name": project.project_name,
+            "segment_id": segment_id,
+            "split_at_sec": split_time_sec,
+            "message": f"Subtitle split at {split_time_sec:.2f}s. Restart CapCut to see changes.",
+        }
+
+    return {"error": f"Could not split segment '{segment_id}' at {split_time_sec}s — check that the time is within the segment's range"}
+
+
+# ---------------------------------------------------------------------------
+# Tool: merge_subtitles
+# ---------------------------------------------------------------------------
+
+async def merge_subtitles(
+    project_path: Optional[str] = None,
+    project_name: Optional[str] = None,
+    segment_id_a: str = "",
+    segment_id_b: str = "",
+) -> dict:
+    """Merge two subtitles into one."""
+    path = _resolve_project_path(project_path, project_name)
+    if isinstance(path, dict):
+        return path
+
+    if not segment_id_a or not segment_id_b:
+        return {"error": "Both segment_id_a and segment_id_b are required"}
+
+    project = CapCutProject.load(path)
+
+    if project.merge_subtitles(segment_id_a, segment_id_b):
+        project.save()
+        return {
+            "project_name": project.project_name,
+            "merged_into": segment_id_a,
+            "removed": segment_id_b,
+            "message": "Subtitles merged. Restart CapCut to see changes.",
+        }
+
+    return {"error": "Could not merge — one or both segment IDs not found"}
+
+
+# ---------------------------------------------------------------------------
+# Tool: fix_word_timing
+# ---------------------------------------------------------------------------
+
+async def fix_word_timing(
+    project_path: Optional[str] = None,
+    project_name: Optional[str] = None,
+    segment_id: str = "",
+    words_text: list[str] | None = None,
+    words_start_ms: list[int] | None = None,
+    words_end_ms: list[int] | None = None,
+) -> dict:
+    """Fix word-level timing on a subtitle."""
+    path = _resolve_project_path(project_path, project_name)
+    if isinstance(path, dict):
+        return path
+
+    if not segment_id:
+        return {"error": "segment_id is required"}
+    if not words_text or not words_start_ms or not words_end_ms:
+        return {"error": "words_text, words_start_ms, and words_end_ms are all required"}
+
+    project = CapCutProject.load(path)
+
+    try:
+        if project.fix_word_timing(segment_id, words_text, words_start_ms, words_end_ms):
+            project.save()
+            return {
+                "project_name": project.project_name,
+                "segment_id": segment_id,
+                "word_count": len(words_text),
+                "message": "Word timing updated. Restart CapCut to see changes.",
+            }
+    except ValueError as e:
+        return {"error": str(e)}
+
+    return {"error": f"Segment '{segment_id}' not found"}
+
+
+# ---------------------------------------------------------------------------
+# Tool: batch_edit_subtitles
+# ---------------------------------------------------------------------------
+
+async def batch_edit_subtitles(
+    project_path: Optional[str] = None,
+    project_name: Optional[str] = None,
+    edits: list[dict] | None = None,
+) -> dict:
+    """Apply multiple subtitle edits in one pass."""
+    path = _resolve_project_path(project_path, project_name)
+    if isinstance(path, dict):
+        return path
+
+    if not edits:
+        return {"error": "edits list is required"}
+
+    project = CapCutProject.load(path)
+    results = []
+
+    for i, edit in enumerate(edits):
+        sid = edit.get("segment_id", "")
+        if not sid:
+            results.append({"index": i, "ok": False, "error": "missing segment_id"})
+            continue
+
+        ok = True
+        new_text = edit.get("new_text")
+        if new_text is not None:
+            if not project.edit_subtitle_text(sid, new_text):
+                results.append({"index": i, "ok": False, "error": "segment not found"})
+                continue
+
+        new_start = edit.get("new_start_sec")
+        new_dur = edit.get("new_duration_sec")
+        if new_start is not None or new_dur is not None:
+            start_us = int(new_start * MICROSECONDS_PER_SECOND) if new_start is not None else None
+            dur_us = int(new_dur * MICROSECONDS_PER_SECOND) if new_dur is not None else None
+            if not project.edit_subtitle_timing(sid, start_us, dur_us):
+                results.append({"index": i, "ok": False, "error": "segment not found"})
+                continue
+
+        results.append({"index": i, "ok": True, "segment_id": sid})
+
+    project.save()
+    succeeded = sum(1 for r in results if r["ok"])
+    return {
+        "project_name": project.project_name,
+        "total": len(edits),
+        "succeeded": succeeded,
+        "failed": len(edits) - succeeded,
+        "results": results,
+        "message": f"{succeeded}/{len(edits)} edits applied. Restart CapCut to see changes.",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

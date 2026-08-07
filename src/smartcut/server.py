@@ -60,7 +60,8 @@ async def list_tools() -> list[Tool]:
                 "Smart cut a CapCut project: remove silences and duplicate takes. "
                 "Reads CapCut's auto-generated subtitles to find gaps and duplicates. "
                 "User must generate subtitles in CapCut first (Text → Auto Captions). "
-                "Modifies the project IN PLACE (no backup). "
+                "Defaults to a dry run that reports the cuts without writing; "
+                "pass dry_run=false to apply them IN PLACE (no backup, cannot be undone). "
                 "By default uses heuristic analysis (free, no API keys). "
                 "Set use_openai=true for GPT-enhanced duplicate detection."
             ),
@@ -76,13 +77,21 @@ async def list_tools() -> list[Tool]:
                     },
                     "similarity_threshold": {
                         "type": "number",
-                        "description": "Text similarity threshold for duplicate detection (0.0-1.0, default 0.6)",
-                        "default": 0.6,
+                        "description": "Text similarity threshold for duplicate detection (0.0-1.0, default 0.8)",
+                        "default": 0.8,
                     },
                     "use_openai": {
                         "type": "boolean",
                         "description": "Use OpenAI GPT for enhanced duplicate detection (requires OPENAI_API_KEY)",
                         "default": False,
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": (
+                            "Report the cuts without writing anything (default true). "
+                            "Set false to apply them — this cannot be undone."
+                        ),
+                        "default": True,
                     },
                 },
                 "required": [],

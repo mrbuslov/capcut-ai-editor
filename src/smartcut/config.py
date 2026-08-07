@@ -33,7 +33,24 @@ class Settings(BaseSettings):
 
 SILENCE_THRESHOLD_SEC = 1.0
 MIN_SEGMENT_DURATION_SEC = 0.5
-DUPLICATE_SIMILARITY_THRESHOLD = 0.6
+# 0.6 matched unrelated sentences that merely shared common words; on a 29-min
+# talking-head project every match below 0.75 was a false positive.
+DUPLICATE_SIMILARITY_THRESHOLD = 0.8
+
+# A retake follows the flubbed line almost immediately, so only look for a
+# restart within this window. Without it, two unrelated sentences minutes apart
+# can share enough common words to look like a duplicate.
+DUPLICATE_LOOKAHEAD_SEC = 30.0
+
+# Reject any single duplicate range longer than this — a real retake is short.
+MAX_DUPLICATE_SPAN_SEC = 90.0
+
+# Short subtitles ("и вот", "да") match almost anything, so never treat one as
+# the start of a take.
+MIN_DUPLICATE_WORDS = 4
+
+# Refuse to apply a cut that would remove more than this fraction of the project.
+MAX_TOTAL_CUT_RATIO = 0.5
 WHISPER_MODEL = "whisper-1"
 LLM_MODEL = "gpt-4.1-mini"
 MICROSECONDS_PER_SECOND = 1_000_000

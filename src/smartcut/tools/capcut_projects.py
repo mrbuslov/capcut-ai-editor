@@ -6,8 +6,12 @@ from pathlib import Path
 from typing import Optional
 
 from smartcut.config import (
+    DUPLICATE_LOOKAHEAD_SEC,
     DUPLICATE_SIMILARITY_THRESHOLD,
+    MAX_DUPLICATE_SPAN_SEC,
+    MAX_TOTAL_CUT_RATIO,
     MICROSECONDS_PER_SECOND,
+    MIN_DUPLICATE_WORDS,
     SILENCE_THRESHOLD_SEC,
     get_settings,
 )
@@ -96,12 +100,17 @@ async def smart_cut_project(
     silence_threshold_sec: float = SILENCE_THRESHOLD_SEC,
     similarity_threshold: float = DUPLICATE_SIMILARITY_THRESHOLD,
     use_openai: bool = False,
+    dry_run: bool = True,
 ) -> dict:
     """
     Smart cut a CapCut project using its auto-generated subtitles.
 
     Reads CapCut's subtitles to heuristically find gaps and duplicate takes,
     then removes them directly in the project (no backup copy).
+
+    Defaults to dry_run=True — it reports the cuts it would make without writing
+    anything. Pass dry_run=False to actually apply them; the project is modified
+    in place and cannot be undone.
 
     Set use_openai=True for GPT-enhanced duplicate detection (requires OPENAI_API_KEY).
     """
@@ -165,15 +174,63 @@ async def smart_cut_project(
     total_cut_us = sum(end - start for start, end in merged_ranges)
     original_duration_us = project.duration_us
 
-    # Step 6: Apply cuts
-    project.remove_time_ranges(merged_ranges)
+    # Step 6: Refuse to apply anything malformed or implausibly large
+    problems = validate_time_ranges(merged_ranges, original_duration_us)
+    if original_duration_us > 0 and total_cut_us > original_duration_us * MAX_TOTAL_CUT_RATIO:
+        problems.append(
+            f"cut would remove {total_cut_us / original_duration_us:.0%} of the project "
+            f"(limit {MAX_TOTAL_CUT_RATIO:.0%})"
+        )
 
-    # Step 7: Save directly (no backup)
+    if problems:
+        return {
+            "error": "Refusing to cut — computed ranges failed validation",
+            "problems": problems,
+            "project_path": str(path),
+            "project_name": project.project_name,
+            "applied": False,
+        }
+
+    cuts_detail = [
+        {
+            "start_sec": round(s / MICROSECONDS_PER_SECOND, 2),
+            "end_sec": round(e / MICROSECONDS_PER_SECOND, 2),
+            "duration_sec": round((e - s) / MICROSECONDS_PER_SECOND, 2),
+        }
+        for s, e in merged_ranges
+    ]
+
+    if dry_run:
+        return {
+            "project_path": str(path),
+            "project_name": project.project_name,
+            "applied": False,
+            "stats": {
+                "original_duration": _format_duration_us(original_duration_us),
+                "final_duration": _format_duration_us(original_duration_us - total_cut_us),
+                "time_saved": _format_duration_us(total_cut_us),
+                "gaps_removed": len(gap_ranges),
+                "duplicates_removed": len(duplicate_ranges),
+                "total_cuts": len(merged_ranges),
+                "subtitles_analyzed": len(subtitles),
+                "used_openai": use_openai,
+            },
+            "cuts_detail": cuts_detail,
+            "message": (
+                f"Dry run — nothing written. Would remove {len(merged_ranges)} ranges "
+                f"({_format_duration_us(total_cut_us)}) from '{project.project_name}'. "
+                f"Pass dry_run=False to apply."
+            ),
+        }
+
+    # Step 7: Apply cuts and save directly (no backup)
+    project.remove_time_ranges(merged_ranges)
     project.save()
 
     return {
         "project_path": str(path),
         "project_name": project.project_name,
+        "applied": True,
         "stats": {
             "original_duration": _format_duration_us(original_duration_us),
             "final_duration": _format_duration_us(original_duration_us - total_cut_us),
@@ -184,14 +241,7 @@ async def smart_cut_project(
             "subtitles_analyzed": len(subtitles),
             "used_openai": use_openai,
         },
-        "cuts_detail": [
-            {
-                "start_sec": round(s / MICROSECONDS_PER_SECOND, 2),
-                "end_sec": round(e / MICROSECONDS_PER_SECOND, 2),
-                "duration_sec": round((e - s) / MICROSECONDS_PER_SECOND, 2),
-            }
-            for s, e in merged_ranges
-        ],
+        "cuts_detail": cuts_detail,
         "message": (
             f"Smart cut applied to '{project.project_name}'. "
             f"Removed {len(gap_ranges)} gaps and {len(duplicate_ranges)} duplicate takes, "
@@ -281,6 +331,8 @@ def find_gaps(
 def find_duplicate_takes(
     subtitles: list[CapCutSubtitleSegment],
     similarity_threshold: float = DUPLICATE_SIMILARITY_THRESHOLD,
+    lookahead_sec: float = DUPLICATE_LOOKAHEAD_SEC,
+    max_span_sec: float = MAX_DUPLICATE_SPAN_SEC,
 ) -> list[tuple[int, int]]:
     """
     Find duplicate takes by detecting "restart points".
@@ -298,32 +350,81 @@ def find_duplicate_takes(
     Cuts the ENTIRE span from first removed subtitle to the start of the kept
     version — including all gaps between subtitles within the removed takes.
 
+    The search is bounded: only restarts within `lookahead_sec` count, and the
+    NEAREST match wins. Scanning the whole timeline for the LAST match made two
+    unrelated sentences 27 minutes apart ("и поэтому в этом видео я расскажу" vs
+    "поэтому в следующем видео я наверное подробно расскажу", similarity 0.64)
+    collapse the entire project into one "duplicate".
+
     Returns time ranges of earlier takes to cut.
     """
     if len(subtitles) < 2:
         return []
 
+    lookahead_us = int(lookahead_sec * MICROSECONDS_PER_SECOND)
+    max_span_us = int(max_span_sec * MICROSECONDS_PER_SECOND)
+
     ranges_to_cut = []
     i = 0
 
     while i < len(subtitles):
-        # Look for the LATEST restart of this subtitle's phrase
-        last_restart = None
-        for j in range(i + 1, len(subtitles)):
-            if compute_text_similarity(subtitles[i].text, subtitles[j].text) >= similarity_threshold:
-                last_restart = j
+        current = subtitles[i]
 
-        if last_restart is not None:
-            # Cut ONE continuous range: from start of first removed
-            # to start of the kept version (includes all gaps between removed subs)
-            cut_start = subtitles[i].timeline_start_us
-            cut_end = subtitles[last_restart].timeline_start_us
-            ranges_to_cut.append((cut_start, cut_end))
-            i = last_restart
-        else:
+        # Short phrases ("и вот", "да") match almost anything — never anchor on one.
+        if len(normalize_text(current.text).split()) < MIN_DUPLICATE_WORDS:
             i += 1
+            continue
+
+        # Look for the NEAREST restart of this phrase, within the lookahead window
+        restart = None
+        for j in range(i + 1, len(subtitles)):
+            if subtitles[j].timeline_start_us - current.timeline_start_us > lookahead_us:
+                break
+            if compute_text_similarity(current.text, subtitles[j].text) >= similarity_threshold:
+                restart = j
+                break
+
+        if restart is None:
+            i += 1
+            continue
+
+        # Cut ONE continuous range: from start of first removed
+        # to start of the kept version (includes all gaps between removed subs)
+        cut_start = current.timeline_start_us
+        cut_end = subtitles[restart].timeline_start_us
+
+        if cut_end - cut_start > max_span_us:
+            i += 1
+            continue
+
+        ranges_to_cut.append((cut_start, cut_end))
+        i = restart
 
     return ranges_to_cut
+
+
+def validate_time_ranges(
+    ranges: list[tuple[int, int]],
+    project_duration_us: int,
+) -> list[str]:
+    """Check merged ranges are sane before they are applied. Returns problems found."""
+    problems = []
+
+    for start, end in ranges:
+        if end <= start:
+            problems.append(f"inverted or empty range: {start} -> {end}")
+        if start < 0 or end > project_duration_us:
+            problems.append(
+                f"range {start} -> {end} outside project (duration {project_duration_us})"
+            )
+
+    for (prev_start, prev_end), (start, end) in zip(ranges, ranges[1:]):
+        if start < prev_end:
+            problems.append(
+                f"overlapping ranges: {prev_start} -> {prev_end} and {start} -> {end}"
+            )
+
+    return problems
 
 
 def merge_time_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
